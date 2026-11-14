@@ -3,99 +3,90 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { newRun } from './src/game/engine';
-import { applyRunResult, buyUpgrade, defaultMeta, type MetaState, type UpgradeId } from './src/game/meta';
+import { applyRun, buyMeta, defaultMeta, runMods, type MetaState, type MetaUpgradeId } from './src/game/meta';
 import { randomSeed } from './src/game/rng';
-import type { RunState } from './src/game/types';
-import { clearRun, loadMeta, loadRun, saveMeta, saveRun } from './src/storage';
+import type { World } from './src/game/types';
+import { createWorld } from './src/game/world';
+import { loadMeta, saveMeta } from './src/storage';
 import { GameScreen } from './src/ui/GameScreen';
 import { MenuScreen, ShopScreen, SummaryScreen } from './src/ui/screens';
 import { colors } from './src/ui/theme';
 
-// Keep the native splash until saved data is loaded, then hide it explicitly (see Game below).
+/** Set only in the simulator smoke-test build: skips the menu and lets the autopilot play. */
+const AUTOPLAY = process.env.EXPO_PUBLIC_AUTOPLAY === '1';
+
+// Keep the native splash until saved data is loaded, then hide it explicitly.
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
-type Screen = { name: 'loading' } | { name: 'menu' } | { name: 'shop' } | { name: 'game' } | { name: 'summary'; run: RunState };
+type Screen =
+  | { name: 'loading' }
+  | { name: 'menu' }
+  | { name: 'shop' }
+  | { name: 'game'; world: World }
+  | { name: 'summary'; world: World; isRecord: boolean };
 
 function Game() {
   const [screen, setScreen] = useState<Screen>({ name: 'loading' });
   const [meta, setMeta] = useState<MetaState>(defaultMeta);
-  const [run, setRun] = useState<RunState | undefined>();
+
+  const newGame = useCallback((m: MetaState) => setScreen({ name: 'game', world: createWorld(randomSeed(), runMods(m)) }), []);
 
   useEffect(() => {
     let alive = true;
-    Promise.all([loadMeta(), loadRun()])
-      .then(([m, r]) => {
+    loadMeta()
+      .then((m) => {
         if (!alive) return;
         setMeta(m);
-        setRun(r);
+        if (AUTOPLAY) newGame(m);
+        else setScreen({ name: 'menu' });
       })
-      .catch((e) => console.error('[shard-delve] failed to load saved data', e))
       .finally(() => {
-        if (!alive) return;
-        setScreen({ name: 'menu' });
         SplashScreen.hide();
         // The simulator smoke test (ios-smoke.yml) waits for this line.
-        console.log('[shard-delve] APP_READY');
+        console.log('[neon-swarm] APP_READY');
       });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [newGame]);
 
   const updateMeta = useCallback((next: MetaState) => {
     setMeta(next);
     saveMeta(next);
   }, []);
 
-  const startRun = useCallback(() => {
-    const r = newRun(randomSeed(), meta);
-    setRun(r);
-    saveRun(r);
-    setScreen({ name: 'game' });
-  }, [meta]);
-
-  const onRunChange = useCallback((r: RunState) => {
-    setRun(r);
-    if (r.status === 'playing') saveRun(r);
-  }, []);
-
-  const onRunEnd = useCallback(
-    (r: RunState) => {
-      updateMeta(applyRunResult(meta, r));
-      setRun(undefined);
-      clearRun();
-      setScreen({ name: 'summary', run: r });
+  const finish = useCallback(
+    (w: World) => {
+      const isRecord = w.time > meta.stats.bestTime + 0.5 && meta.stats.runs > 0;
+      updateMeta(applyRun(meta, w));
+      if (AUTOPLAY) newGame(meta);
+      else setScreen({ name: 'summary', world: w, isRecord });
     },
-    [meta, updateMeta]
+    [meta, updateMeta, newGame]
   );
-
-  const onBuy = useCallback((id: UpgradeId) => updateMeta(buyUpgrade(meta, id)), [meta, updateMeta]);
 
   switch (screen.name) {
     case 'loading':
       return <View style={styles.fill} />;
     case 'menu':
+      return <MenuScreen meta={meta} onPlay={() => newGame(meta)} onShop={() => setScreen({ name: 'shop' })} />;
+    case 'shop':
+      return <ShopScreen meta={meta} onBuy={(id: MetaUpgradeId) => updateMeta(buyMeta(meta, id))} onBack={() => setScreen({ name: 'menu' })} />;
+    case 'summary':
       return (
-        <MenuScreen
-          meta={meta}
-          hasSavedRun={!!run}
-          onNewRun={startRun}
-          onContinue={() => setScreen({ name: 'game' })}
-          onShop={() => setScreen({ name: 'shop' })}
+        <SummaryScreen
+          world={screen.world}
+          isRecord={screen.isRecord}
+          onAgain={() => newGame(meta)}
+          onMenu={() => setScreen({ name: 'menu' })}
         />
       );
-    case 'shop':
-      return <ShopScreen meta={meta} onBuy={onBuy} onBack={() => setScreen({ name: 'menu' })} />;
-    case 'summary':
-      return <SummaryScreen run={screen.run} onContinue={() => setScreen({ name: 'menu' })} />;
     case 'game':
-      if (!run) return <View style={styles.fill} />;
-      return <GameScreen run={run} onChange={onRunChange} onEnd={onRunEnd} onMenu={() => setScreen({ name: 'menu' })} />;
+      return <GameScreen key={screen.world.seed} world={screen.world} autoplay={AUTOPLAY} onEnd={finish} onQuit={finish} />;
   }
 }
 
-/** Last line of defence: show a recoverable screen instead of a white crash. */
+/** Last line of defence: show a recoverable screen instead of a frozen app. */
 class ErrorBoundary extends Component<{ children: ReactNode }, { error?: Error }> {
   override state: { error?: Error } = {};
 
@@ -124,7 +115,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error?: Error }
 export default function App() {
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" />
+      <StatusBar style="light" hidden />
       <ErrorBoundary>
         <Game />
       </ErrorBoundary>
@@ -137,5 +128,5 @@ const styles = StyleSheet.create({
   center: { alignItems: 'center', justifyContent: 'center', padding: 24, gap: 12 },
   errTitle: { color: colors.text, fontSize: 18, fontWeight: '800' },
   errText: { color: colors.textDim, textAlign: 'center' },
-  errBtn: { marginTop: 8, paddingVertical: 12, paddingHorizontal: 24, borderRadius: 12, backgroundColor: colors.accent },
+  errBtn: { marginTop: 8, paddingVertical: 12, paddingHorizontal: 24, borderRadius: 12, backgroundColor: '#5b3dff' },
 });

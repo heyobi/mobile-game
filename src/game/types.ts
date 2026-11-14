@@ -1,54 +1,76 @@
-export interface Vec {
-  x: number;
-  y: number;
-}
+import type { EnemyKind, UpgradeId } from './config';
 
-export type Dir = 'up' | 'down' | 'left' | 'right';
-
-export const DIRS: Record<Dir, Vec> = {
-  up: { x: 0, y: -1 },
-  down: { x: 0, y: 1 },
-  left: { x: -1, y: 0 },
-  right: { x: 1, y: 0 },
-};
-
-export const Tile = { Wall: 0, Floor: 1, Stairs: 2 } as const;
-// eslint-disable-next-line @typescript-eslint/no-redeclare -- value + type pair (enum replacement)
-export type Tile = (typeof Tile)[keyof typeof Tile];
-
-export interface GameMap {
-  w: number;
-  h: number;
-  /** Row-major tiles, index = y * w + x. */
-  tiles: Tile[];
-  /** 1 if the player has ever seen the tile (stored as numbers to keep JSON small). */
-  seen: number[];
-}
-
-export type MonsterKind = 'slime' | 'goblin' | 'archer' | 'brute' | 'warden';
-
-export interface Monster {
+export interface Enemy {
   id: number;
-  kind: MonsterKind;
+  kind: EnemyKind;
   x: number;
   y: number;
   hp: number;
   maxHp: number;
-  atk: number;
-  def: number;
-  /** Has noticed the player; keeps chasing after losing sight. */
-  aware: boolean;
+  speed: number;
+  radius: number;
+  damage: number;
+  /** Seconds of white hit-flash left. */
+  flash: number;
+  /** Knockback velocity, decays quickly. */
+  kx: number;
+  ky: number;
+  /** Shooter/boss weapon cooldown. */
+  cooldown: number;
+  /** Rotation for rendering. */
+  angle: number;
+  /** Last nova pulse id that hit this enemy, so each pulse hits once. */
+  novaHit: number;
 }
 
-export type ItemKind = 'potion' | 'shard' | 'blade' | 'plate' | 'elixir';
-
-export interface Item {
-  id: number;
-  kind: ItemKind;
+export interface Bullet {
   x: number;
   y: number;
-  /** Shards: amount. Others: unused (1). */
-  amount: number;
+  vx: number;
+  vy: number;
+  radius: number;
+  damage: number;
+  pierce: number;
+  life: number;
+  /** Ids already hit, so piercing bullets do not hit the same enemy twice. */
+  hit: number[];
+}
+
+export interface EnemyBullet {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+}
+
+export interface Gem {
+  x: number;
+  y: number;
+  value: number;
+  /** Being pulled to the player. */
+  pulled: boolean;
+}
+
+export interface Particle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  maxLife: number;
+  size: number;
+  color: string;
+}
+
+export interface Nova {
+  id: number;
+  x: number;
+  y: number;
+  radius: number;
+  maxRadius: number;
+  damage: number;
+  life: number;
 }
 
 export interface Player {
@@ -56,52 +78,66 @@ export interface Player {
   y: number;
   hp: number;
   maxHp: number;
-  atk: number;
-  def: number;
-  potions: number;
-  level: number;
-  xp: number;
+  invuln: number;
+  /** Facing angle (towards the current target). */
+  aim: number;
 }
 
-export type RunStatus = 'playing' | 'dead' | 'won';
+export type Phase = 'playing' | 'levelup' | 'dead' | 'won';
 
-export interface RunState {
-  version: 1;
+export interface InputState {
+  /** Desired move direction; length 0..1. */
+  mx: number;
+  my: number;
+}
+
+export interface WorldEvents {
+  kills: number;
+  hurt: number;
+  levelUp: boolean;
+  bossSpawned: boolean;
+  bossKilled: boolean;
+  died: boolean;
+  pickups: number;
+}
+
+export interface World {
   seed: number;
   rng: number;
-  depth: number;
-  turn: number;
-  map: GameMap;
+  time: number;
+  phase: Phase;
   player: Player;
-  monsters: Monster[];
-  items: Item[];
-  log: string[];
-  status: RunStatus;
-  shards: number;
+  enemies: Enemy[];
+  bullets: Bullet[];
+  enemyBullets: EnemyBullet[];
+  gems: Gem[];
+  particles: Particle[];
+  novas: Nova[];
+  upgrades: Record<UpgradeId, number>;
+  level: number;
+  xp: number;
   kills: number;
+  /** Upgrade choices offered while phase === 'levelup'. */
+  offer: UpgradeId[];
+  /** Pending level-ups (several can queue from one big gem pickup). */
+  pendingLevels: number;
+  spawnBudget: number;
+  fireCooldown: number;
+  novaCooldown: number;
+  novaCounter: number;
+  orbitAngle: number;
+  bossSpawned: boolean;
+  /** Screen shake intensity in px, decays. */
+  shake: number;
   nextId: number;
-  /** Which monster killed the player, for the run summary. */
-  killedBy?: MonsterKind;
+  /** Meta-progression bonuses applied at run start. */
+  mods: RunMods;
+  events: WorldEvents;
 }
 
-export type Action = { type: 'move'; dir: Dir } | { type: 'wait' } | { type: 'quaff' };
-
-export type GameEvent =
-  | { type: 'hit'; x: number; y: number; amount: number; targetId: number }
-  | { type: 'kill'; x: number; y: number; kind: MonsterKind }
-  | { type: 'hurt'; amount: number; by: MonsterKind }
-  | { type: 'shot'; from: Vec; to: Vec }
-  | { type: 'pickup'; kind: ItemKind; x: number; y: number }
-  | { type: 'heal'; amount: number }
-  | { type: 'levelUp'; level: number }
-  | { type: 'descend'; depth: number }
-  | { type: 'bump' }
-  | { type: 'death' }
-  | { type: 'victory' };
-
-export interface StepResult {
-  state: RunState;
-  events: GameEvent[];
-  /** False when the action was rejected (e.g. walking into a wall) and no turn passed. */
-  tookTurn: boolean;
+export interface RunMods {
+  damageMul: number;
+  hpBonus: number;
+  speedMul: number;
+  xpMul: number;
 }

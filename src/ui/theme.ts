@@ -1,34 +1,21 @@
-import type { ItemKind, MonsterKind } from '../game/types';
-
 export const colors = {
-  bg: '#0e0c17',
-  wall: '#2a2540',
-  wallSeen: '#1a1729',
-  floor: '#1b1830',
-  floorSeen: '#131122',
-  stairs: '#ffd166',
-  player: '#7cf3ff',
-  text: '#f2efff',
-  textDim: '#9a93c0',
-  accent: '#7c6cff',
-  danger: '#ff5d73',
-  heal: '#62e39b',
-  panel: 'rgba(14,12,23,0.88)',
-  panelBorder: '#2f2950',
+  bg: '#06040f',
+  text: '#f4f1ff',
+  textDim: '#a49cd0',
+  cyan: '#3df5ff',
+  magenta: '#ff3df2',
+  yellow: '#ffe23d',
+  orange: '#ff8a1f',
+  green: '#3dff8b',
+  red: '#ff4d4d',
+  panel: 'rgba(10,7,26,0.86)',
+  border: '#3a2a80',
 } as const;
 
-export const monsterColors: Record<MonsterKind, string> = {
-  slime: '#62e39b',
-  goblin: '#ffb84d',
-  archer: '#ff8fd1',
-  brute: '#ff5d73',
-  warden: '#c38cff',
-};
-
-export const itemColors: Record<ItemKind, string> = {
-  potion: '#ff5d73',
-  shard: '#7cf3ff',
-  blade: '#f2efff',
-  plate: '#9aa7c7',
-  elixir: '#62e39b',
-};
+/** Neon text glow for headings. */
+export const glowText = (color: string) => ({
+  color,
+  textShadowColor: color,
+  textShadowRadius: 14,
+  textShadowOffset: { width: 0, height: 0 },
+});

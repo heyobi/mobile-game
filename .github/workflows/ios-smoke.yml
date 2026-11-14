@@ -24,7 +24,10 @@ jobs:
       - name: Expo prebuild (iOS)
         run: npx expo prebuild --platform ios --clean
 
-      - name: Build for simulator (Release)
+      - name: Build for simulator (Release, autopilot)
+        env:
+          # Inlined by Metro: the app skips the menu and the autopilot plays a run.
+          EXPO_PUBLIC_AUTOPLAY: '1'
         run: |
           set -o pipefail
           WORKSPACE=$(ls -d ios/*.xcworkspace | head -n 1)
@@ -52,20 +55,30 @@ jobs:
           mkdir -p smoke
           START=$(date '+%Y-%m-%d %H:%M:%S')
           xcrun simctl launch "$DEVICE" "$BUNDLE_ID"
-          sleep 30
-          xcrun simctl io "$DEVICE" screenshot smoke/screen.png
+          xcrun simctl io "$DEVICE" recordVideo --codec h264 --force smoke/gameplay.mp4 &
+          REC=$!
+          for t in 6 15 30 45 60; do
+            sleep $(( t - ${prev:-0} )); prev=$t
+            xcrun simctl io "$DEVICE" screenshot "smoke/screen-${t}s.png"
+          done
+          kill -INT $REC || true
+          wait $REC || true
           xcrun simctl spawn "$DEVICE" log show --start "$START" --style compact --info --debug             --predicate 'subsystem == "com.facebook.react.log" OR process == "'"$SCHEME"'"' > smoke/app.log 2>&1 || true
-          echo "--- React Native / app log (last 120 lines) ---"
-          grep -v "^Filtering\|^Timestamp" smoke/app.log | tail -n 120 | cut -c1-400 || true
+          echo "--- JavaScript log ---"
+          grep "javascript\]" smoke/app.log | cut -c1-300 | tail -n 60 || true
+          if grep -q "Unhandled JS Exception" smoke/app.log; then
+            echo "::error::Unhandled JS exception (see log above)."
+            exit 1
+          fi
           if ! xcrun simctl spawn "$DEVICE" launchctl list | grep -q "$BUNDLE_ID"; then
             echo "::error::App is not running after launch (crashed)."
             exit 1
           fi
           if ! grep -q "APP_READY" smoke/app.log; then
-            echo "::error::App did not report APP_READY within 30s (stuck on splash or JS error)."
+            echo "::error::App did not report APP_READY (stuck on splash or JS error)."
             exit 1
           fi
-          echo "✓ App launched and reported APP_READY"
+          echo "✓ App launched, reported APP_READY and survived 60s of autoplay"
 
       - name: Upload screenshot and log
         if: always()

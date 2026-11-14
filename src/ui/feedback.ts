@@ -1,17 +1,19 @@
 import * as Haptics from 'expo-haptics';
-import type { GameEvent } from '../game/types';
+import type { WorldEvents } from '../game/types';
 
 const ignore = () => {};
+let lastKillBuzz = 0;
 
-/** Maps game events to haptic feedback (strongest event wins, one buzz per turn). */
-export function hapticsFor(events: GameEvent[]) {
-  const types = new Set(events.map((e) => e.type));
-  if (types.has('death')) return Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(ignore);
-  if (types.has('victory') || types.has('levelUp') || types.has('descend'))
-    return Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(ignore);
-  if (types.has('hurt')) return Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(ignore);
-  if (types.has('kill')) return Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(ignore);
-  if (types.has('hit') || types.has('pickup')) return Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(ignore);
-  if (types.has('bump')) return Haptics.selectionAsync().catch(ignore);
+/** Maps one frame's world events to haptics (throttled so swarms do not buzz constantly). */
+export function hapticsFor(e: WorldEvents, now: number) {
+  if (e.died) return Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(ignore);
+  if (e.bossKilled) return Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(ignore);
+  if (e.bossSpawned) return Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(ignore);
+  if (e.levelUp) return Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(ignore);
+  if (e.hurt > 0) return Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(ignore);
+  if (e.kills > 0 && now - lastKillBuzz > 90) {
+    lastKillBuzz = now;
+    return Haptics.impactAsync(e.kills > 2 ? Haptics.ImpactFeedbackStyle.Medium : Haptics.ImpactFeedbackStyle.Light).catch(ignore);
+  }
   return undefined;
 }

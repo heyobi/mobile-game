@@ -1,21 +1,45 @@
-import type { ReactNode } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { type ReactNode, useCallback, useRef, useState } from 'react';
+import { type LayoutChangeEvent, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Canvas, Picture } from '@shopify/react-native-skia';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Constants from 'expo-constants';
-import { FINAL_DEPTH, MONSTERS } from '../game/content';
-import { canBuy, UPGRADE_IDS, UPGRADES, upgradeCost, type MetaState, type UpgradeId } from '../game/meta';
-import type { RunState } from '../game/types';
-import { colors } from './theme';
+import { botChoice, botInput } from '../game/bot';
+import { canBuyMeta, crystalsFor, META_UPGRADE_IDS, META_UPGRADES, metaCost, type MetaState, type MetaUpgradeId } from '../game/meta';
+import type { World } from '../game/types';
+import { chooseUpgrade, createWorld } from '../game/world';
+import { colors, glowText } from './theme';
+import { useWorldLoop } from './useWorldLoop';
 
-function Screen({ children }: { children: ReactNode }) {
-  const insets = useSafeAreaInsets();
+function formatTime(t: number) {
+  const s = Math.max(0, Math.floor(t));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** A self-playing game behind the menu: the store screenshot and the first impression in one. */
+function backdropWorld(seed: number): World {
+  const w = createWorld(seed);
+  w.time = 95; // start mid-action so the screen is busy immediately
+  return w;
+}
+
+function Backdrop() {
+  const [initial] = useState(() => backdropWorld(12345));
+  const world = useRef<World | null>(initial);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const input = useCallback(() => (world.current ? botInput(world.current) : { mx: 0, my: 0 }), []);
+  const onFrame = useCallback((w: World) => {
+    if (w.phase === 'levelup') chooseUpgrade(w, botChoice(w));
+    if (w.phase === 'dead' || w.phase === 'won' || w.time > 280) {
+      world.current = backdropWorld(Math.floor(Math.random() * 1e9));
+    }
+  }, []);
+  const picture = useWorldLoop({ world, view: { ...size, dim: 0.55 }, input, running: true, onFrame });
+  const onLayout = (e: LayoutChangeEvent) =>
+    setSize({ width: Math.round(e.nativeEvent.layout.width), height: Math.round(e.nativeEvent.layout.height) });
   return (
-    <ScrollView
-      style={styles.root}
-      contentContainerStyle={[styles.content, { paddingTop: insets.top + 32, paddingBottom: insets.bottom + 24 }]}
-    >
-      {children}
-    </ScrollView>
+    <View style={StyleSheet.absoluteFill} onLayout={onLayout} pointerEvents="none">
+      {size.width > 0 && <Canvas style={size}>{picture && <Picture picture={picture} />}</Canvas>}
+    </View>
   );
 }
 
@@ -27,58 +51,51 @@ function Button({ label, onPress, primary, disabled }: { label: string; onPress:
       onPress={onPress}
       style={({ pressed }) => [styles.button, primary && styles.primary, disabled && styles.disabled, pressed && styles.pressed]}
     >
-      <Text style={styles.buttonText}>{label}</Text>
+      <Text style={[styles.buttonText, primary && styles.primaryText]}>{label}</Text>
     </Pressable>
   );
 }
 
-export function MenuScreen({
-  meta,
-  hasSavedRun,
-  onNewRun,
-  onContinue,
-  onShop,
-}: {
-  meta: MetaState;
-  hasSavedRun: boolean;
-  onNewRun: () => void;
-  onContinue: () => void;
-  onShop: () => void;
-}) {
+function Shell({ children, backdrop }: { children: ReactNode; backdrop?: boolean }) {
+  const insets = useSafeAreaInsets();
+  return (
+    <View style={styles.root}>
+      {backdrop && <Backdrop />}
+      <ScrollView contentContainerStyle={[styles.content, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 28 }]}>
+        {children}
+      </ScrollView>
+    </View>
+  );
+}
+
+export function MenuScreen({ meta, onPlay, onShop }: { meta: MetaState; onPlay: () => void; onShop: () => void }) {
   const version = Constants.expoConfig?.version ?? '';
   const build = Constants.expoConfig?.ios?.buildNumber ?? '';
   return (
-    <Screen>
+    <Shell backdrop>
       <View style={styles.hero}>
-        <Text style={styles.logo}>◆</Text>
-        <Text style={styles.title}>Shard Delve</Text>
-        <Text style={styles.subtitle}>Descend {FINAL_DEPTH} depths. Defeat the Warden.</Text>
+        <Text style={[styles.title, glowText(colors.cyan)]}>NEON</Text>
+        <Text style={[styles.title, glowText(colors.magenta)]}>SWARM</Text>
+        <Text style={styles.tagline}>Survive 5 minutes. Destroy the Overseer.</Text>
       </View>
+      <View style={styles.spacer} />
       <View style={styles.stack}>
-        {hasSavedRun && <Button primary label="Continue run" onPress={onContinue} />}
-        <Button primary={!hasSavedRun} label={hasSavedRun ? 'Abandon & new run' : 'New run'} onPress={onNewRun} />
-        <Button label={`Upgrades  ·  ◆ ${meta.shards}`} onPress={onShop} />
+        <Button primary label="PLAY" onPress={onPlay} />
+        <Button label={`Upgrades   ◆ ${meta.crystals}`} onPress={onShop} />
       </View>
-      <View style={styles.statsBox}>
-        <Stat label="Runs" value={meta.stats.runs} />
-        <Stat label="Wins" value={meta.stats.wins} />
-        <Stat label="Best depth" value={meta.stats.bestDepth} />
-        <Stat label="Kills" value={meta.stats.kills} />
-      </View>
-      <View style={styles.help}>
-        <Text style={styles.helpTitle}>How to play</Text>
-        <Text style={styles.helpText}>Swipe or tap beside you to move. Walk into enemies to attack.</Text>
-        <Text style={styles.helpText}>Tap yourself or “Wait” to skip a turn. Find the golden stairs.</Text>
-        <Text style={styles.helpText}>Shards you collect are kept even if you fall — spend them on upgrades.</Text>
+      <View style={styles.stats}>
+        <Stat label="Best time" value={formatTime(meta.stats.bestTime)} />
+        <Stat label="Best kills" value={String(meta.stats.bestKills)} />
+        <Stat label="Wins" value={String(meta.stats.wins)} />
       </View>
       <Text style={styles.version}>
         v{version} ({build})
       </Text>
-    </Screen>
+    </Shell>
   );
 }
 
-function Stat({ label, value }: { label: string; value: number }) {
+function Stat({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.stat}>
       <Text style={styles.statValue}>{value}</Text>
@@ -87,97 +104,130 @@ function Stat({ label, value }: { label: string; value: number }) {
   );
 }
 
-export function SummaryScreen({ run, onContinue }: { run: RunState; onContinue: () => void }) {
-  const won = run.status === 'won';
+export function SummaryScreen({
+  world,
+  isRecord,
+  onAgain,
+  onMenu,
+}: {
+  world: World;
+  isRecord: boolean;
+  onAgain: () => void;
+  onMenu: () => void;
+}) {
+  const won = world.phase === 'won';
   return (
-    <Screen>
+    <Shell>
       <View style={styles.hero}>
-        <Text style={[styles.logo, { color: won ? colors.stairs : colors.danger }]}>{won ? '★' : '✕'}</Text>
-        <Text style={styles.title}>{won ? 'Victory' : 'You fell'}</Text>
-        <Text style={styles.subtitle}>
-          {won
-            ? 'The Warden is defeated.'
-            : `Slain by ${run.killedBy ? MONSTERS[run.killedBy].name : 'the depths'} on depth ${run.depth}.`}
-        </Text>
+        <Text style={[styles.title, glowText(won ? colors.yellow : colors.red)]}>{won ? 'VICTORY' : 'DESTROYED'}</Text>
+        {isRecord && <Text style={[styles.record, glowText(colors.yellow)]}>NEW RECORD</Text>}
       </View>
-      <View style={styles.statsBox}>
-        <Stat label="Depth" value={run.depth} />
-        <Stat label="Kills" value={run.kills} />
-        <Stat label="Level" value={run.player.level} />
-        <Stat label="Turns" value={run.turn} />
+      <View style={styles.stats}>
+        <Stat label="Survived" value={formatTime(world.time)} />
+        <Stat label="Kills" value={String(world.kills)} />
+        <Stat label="Level" value={String(world.level)} />
       </View>
-      <Text style={styles.earned}>+ ◆ {run.shards} shards banked</Text>
-      <Text style={styles.seed}>Seed {run.seed}</Text>
+      <Text style={[styles.earned, glowText(colors.cyan)]}>+ ◆ {crystalsFor(world)} crystals</Text>
       <View style={styles.stack}>
-        <Button primary label="Continue" onPress={onContinue} />
+        <Button primary label="PLAY AGAIN" onPress={onAgain} />
+        <Button label="Menu" onPress={onMenu} />
       </View>
-    </Screen>
+    </Shell>
   );
 }
 
-export function ShopScreen({ meta, onBuy, onBack }: { meta: MetaState; onBuy: (id: UpgradeId) => void; onBack: () => void }) {
+export function ShopScreen({ meta, onBuy, onBack }: { meta: MetaState; onBuy: (id: MetaUpgradeId) => void; onBack: () => void }) {
   return (
-    <Screen>
-      <Text style={styles.title}>Upgrades</Text>
-      <Text style={[styles.subtitle, { marginBottom: 20 }]}>◆ {meta.shards} shards</Text>
+    <Shell>
+      <Text style={[styles.heading, glowText(colors.cyan)]}>UPGRADES</Text>
+      <Text style={styles.tagline}>◆ {meta.crystals} crystals · permanent for every run</Text>
       <View style={styles.stack}>
-        {UPGRADE_IDS.map((id) => {
-          const def = UPGRADES[id];
+        {META_UPGRADE_IDS.map((id) => {
+          const def = META_UPGRADES[id];
           const lvl = meta.upgrades[id];
           const maxed = lvl >= def.maxLevel;
+          const ok = canBuyMeta(meta, id);
           return (
             <View key={id} style={styles.upgrade}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.upgradeName}>
-                  {def.name} <Text style={styles.dim}>{lvl}/{def.maxLevel}</Text>
+                  {def.name}{' '}
+                  <Text style={styles.dim}>
+                    {lvl}/{def.maxLevel}
+                  </Text>
                 </Text>
-                <Text style={styles.upgradeDesc}>{def.description}</Text>
+                <Text style={styles.dim}>{def.description}</Text>
               </View>
               <Pressable
-                accessibilityRole="button"
-                disabled={!canBuy(meta, id)}
+                disabled={!ok}
                 onPress={() => onBuy(id)}
-                style={({ pressed }) => [styles.buyBtn, !canBuy(meta, id) && styles.disabled, pressed && styles.pressed]}
+                style={({ pressed }) => [styles.buy, !ok && styles.disabled, pressed && styles.pressed]}
               >
-                <Text style={styles.buttonText}>{maxed ? 'MAX' : `◆ ${upgradeCost(id, lvl)}`}</Text>
+                <Text style={styles.primaryText}>{maxed ? 'MAX' : `◆ ${metaCost(id, lvl)}`}</Text>
               </Pressable>
             </View>
           );
         })}
       </View>
-      <View style={[styles.stack, { marginTop: 24 }]}>
-        <Button label="Back" onPress={onBack} />
-      </View>
-    </Screen>
+      <Button label="Back" onPress={onBack} />
+    </Shell>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
-  content: { paddingHorizontal: 24, gap: 20 },
-  hero: { alignItems: 'center', gap: 6, marginBottom: 8 },
-  logo: { fontSize: 56, color: colors.player },
-  title: { color: colors.text, fontSize: 40, fontWeight: '900', textAlign: 'center' },
-  subtitle: { color: colors.textDim, fontSize: 16, textAlign: 'center' },
+  content: { flexGrow: 1, paddingHorizontal: 24, gap: 18 },
+  hero: { alignItems: 'center', marginTop: 20 },
+  title: { fontSize: 64, fontWeight: '900', letterSpacing: 8, lineHeight: 70 },
+  tagline: { color: colors.textDim, fontSize: 16, textAlign: 'center', marginTop: 10 },
+  spacer: { flexGrow: 1, minHeight: 40 },
+  heading: { fontSize: 38, fontWeight: '900', letterSpacing: 4, textAlign: 'center' },
+  record: { fontSize: 20, fontWeight: '900', letterSpacing: 4, marginTop: 6 },
   stack: { gap: 12 },
-  button: { paddingVertical: 16, borderRadius: 16, backgroundColor: '#241f3d', alignItems: 'center' },
-  primary: { backgroundColor: colors.accent },
-  buttonText: { color: colors.text, fontSize: 17, fontWeight: '800' },
-  pressed: { opacity: 0.7 },
-  disabled: { opacity: 0.4 },
-  statsBox: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#17142a', borderRadius: 16, padding: 16 },
-  stat: { alignItems: 'center', flex: 1 },
-  statValue: { color: colors.text, fontSize: 22, fontWeight: '800' },
-  statLabel: { color: colors.textDim, fontSize: 12 },
-  help: { gap: 4 },
-  helpTitle: { color: colors.text, fontWeight: '800', fontSize: 15 },
-  helpText: { color: colors.textDim, fontSize: 14, lineHeight: 20 },
-  version: { color: '#5d5780', textAlign: 'center', fontSize: 12 },
-  earned: { color: colors.player, fontSize: 20, fontWeight: '800', textAlign: 'center' },
-  seed: { color: '#5d5780', textAlign: 'center', fontSize: 12 },
+  button: {
+    paddingVertical: 17,
+    borderRadius: 18,
+    backgroundColor: 'rgba(26,19,56,0.9)',
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+  },
+  primary: {
+    backgroundColor: colors.cyan,
+    borderColor: colors.cyan,
+    shadowColor: colors.cyan,
+    shadowOpacity: 0.8,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  buttonText: { color: colors.text, fontSize: 18, fontWeight: '800' },
+  primaryText: { color: '#06040f', fontSize: 18, fontWeight: '900', letterSpacing: 2 },
+  pressed: { opacity: 0.75, transform: [{ scale: 0.98 }] },
+  disabled: { opacity: 0.35 },
+  stats: {
+    flexDirection: 'row',
+    backgroundColor: colors.panel,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: 14,
+  },
+  stat: { flex: 1, alignItems: 'center' },
+  statValue: { color: colors.text, fontSize: 22, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  statLabel: { color: colors.textDim, fontSize: 12, marginTop: 2 },
+  earned: { fontSize: 22, fontWeight: '900', textAlign: 'center' },
+  version: { color: '#4b437a', textAlign: 'center', fontSize: 12 },
+  upgrade: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 16,
+    borderRadius: 18,
+    backgroundColor: colors.panel,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  upgradeName: { color: colors.text, fontSize: 18, fontWeight: '900' },
   dim: { color: colors.textDim, fontWeight: '500' },
-  upgrade: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#17142a', borderRadius: 16, padding: 16 },
-  upgradeName: { color: colors.text, fontSize: 17, fontWeight: '800' },
-  upgradeDesc: { color: colors.textDim, fontSize: 14 },
-  buyBtn: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 12, backgroundColor: colors.accent, minWidth: 80, alignItems: 'center' },
+  buy: { backgroundColor: colors.cyan, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 14, minWidth: 84, alignItems: 'center' },
 });
