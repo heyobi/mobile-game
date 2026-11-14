@@ -55,15 +55,21 @@ jobs:
           mkdir -p smoke
           START=$(date '+%Y-%m-%d %H:%M:%S')
           xcrun simctl launch "$DEVICE" "$BUNDLE_ID"
+          LOGQ='subsystem == "com.facebook.react.log" OR process == "'"$SCHEME"'"'
           xcrun simctl io "$DEVICE" recordVideo --codec h264 --force smoke/gameplay.mp4 &
           REC=$!
-          for t in 6 15 30 45 60; do
-            sleep $(( t - ${prev:-0} )); prev=$t
-            xcrun simctl io "$DEVICE" screenshot "smoke/screen-${t}s.png"
-          done
+          sleep 8
+          # Info-level logs are memory-only and get evicted, so read the startup log early.
+          xcrun simctl spawn "$DEVICE" log show --start "$START" --style compact --info --debug --predicate "$LOGQ" > smoke/startup.log 2>&1 || true
+          xcrun simctl io "$DEVICE" screenshot smoke/screen-08s.png
+          sleep 12
           kill -INT $REC || true
           wait $REC || true
-          xcrun simctl spawn "$DEVICE" log show --start "$START" --style compact --info --debug             --predicate 'subsystem == "com.facebook.react.log" OR process == "'"$SCHEME"'"' > smoke/app.log 2>&1 || true
+          xcrun simctl io "$DEVICE" screenshot smoke/screen-20s.png
+          sleep 25
+          xcrun simctl io "$DEVICE" screenshot smoke/screen-45s.png
+          xcrun simctl spawn "$DEVICE" log show --start "$START" --style compact --info --debug --predicate "$LOGQ" > smoke/app.log 2>&1 || true
+          cat smoke/startup.log >> smoke/app.log
           echo "--- JavaScript log ---"
           grep "javascript\]" smoke/app.log | cut -c1-300 | tail -n 60 || true
           if grep -q "Unhandled JS Exception" smoke/app.log; then

@@ -183,6 +183,12 @@ ringP.setBlendMode(BlendMode.Plus);
 
 const overlayP = Skia.Paint();
 
+const streakP = Skia.Paint();
+streakP.setStyle(PaintStyle.Stroke);
+streakP.setStrokeCap(StrokeCap.Round);
+streakP.setBlendMode(BlendMode.Plus);
+streakP.setAntiAlias(true);
+
 /** Draws one frame of the world into a new picture. */
 export function renderWorld(w: World, view: View, joystick?: Joystick): SkPicture {
   const rec = Skia.PictureRecorder();
@@ -246,11 +252,21 @@ export function renderWorld(w: World, view: View, joystick?: Joystick): SkPictur
     c.drawCircle(b.x, b.y, ENEMY_BULLET.radius * 0.7, dotPaint('#ffe2c4'));
   }
 
-  // Player bullets
-  const bulletCore = dotPaint('#e8fdff');
+  // Player bullets: bright streaks along their velocity
   for (const b of w.bullets) {
-    drawGlow(c, b.x, b.y, b.radius * 3.2, '#3df5ff', 0.7);
-    c.drawCircle(b.x, b.y, b.radius * 0.75, bulletCore);
+    const sp = Math.hypot(b.vx, b.vy) || 1;
+    const tail = 0.045;
+    const tx = b.x - b.vx * tail;
+    const ty = b.y - b.vy * tail;
+    drawGlow(c, b.x, b.y, b.radius * 4, '#3df5ff', 0.75);
+    streakP.setStrokeWidth(b.radius * 2.2);
+    streakP.setColor(Skia.Color('#3df5ff'));
+    streakP.setAlphaf(0.55);
+    c.drawLine(tx, ty, b.x, b.y, streakP);
+    streakP.setStrokeWidth(b.radius * 0.9);
+    streakP.setColor(Skia.Color('#f2feff'));
+    streakP.setAlphaf(1);
+    c.drawLine(b.x - (b.vx / sp) * b.radius * 3, b.y - (b.vy / sp) * b.radius * 3, b.x, b.y, streakP);
   }
 
   // Orbit blades

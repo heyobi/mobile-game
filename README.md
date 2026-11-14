@@ -1,6 +1,6 @@
-# Shard Delve (mobile-game)
+# Neon Swarm (mobile-game)
 
-Tur tabanlı, kısa run'lı (5–10 dk) bir zindan roguelike'ı. Expo (SDK 57) + TypeScript +
+Neon horde-survival roguelite (5 dakikalık run, tek parmak, otomatik ateş, seviye başına 3 güçten biri). Expo (SDK 57) + TypeScript +
 [`@shopify/react-native-skia`](https://shopify.github.io/react-native-skia/). Tasarım: [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md).
 
 ## Geliştirme
