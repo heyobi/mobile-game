@@ -1,0 +1,74 @@
+name: iOS simulator smoke test
+
+# Builds a Release app for the simulator (JS bundled, no signing), launches it, and checks that it
+# gets past the splash screen. Uploads a screenshot and the app's log as artifacts.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  smoke:
+    name: Launch in iOS simulator
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Expo prebuild (iOS)
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Build for simulator (Release)
+        run: |
+          set -o pipefail
+          WORKSPACE=$(ls -d ios/*.xcworkspace | head -n 1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
+          xcodebuild build \
+            -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/sim CODE_SIGNING_ALLOWED=NO | tail -n 40
+
+      - name: Boot simulator, install and launch
+        run: |
+          APP=$(find build/sim/Build/Products -maxdepth 2 -name "*.app" | head -n 1)
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist")
+          DEVICE=$(xcrun simctl list devices available -j | node -e "
+            const d = JSON.parse(require('fs').readFileSync(0, 'utf8')).devices;
+            const all = Object.entries(d).filter(([k]) => k.includes('iOS')).flatMap(([, v]) => v);
+            const pick = all.find((x) => /iPhone \d+ Pro$/.test(x.name)) || all.find((x) => x.name.startsWith('iPhone'));
+            process.stdout.write(pick.udid);
+          ")
+          echo "Device $DEVICE, app $APP ($BUNDLE_ID)"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" "$APP"
+          mkdir -p smoke
+          xcrun simctl spawn "$DEVICE" log stream --level debug --style compact \
+            --predicate "process == \"$SCHEME\"" > smoke/app.log 2>&1 &
+          LOG_PID=$!
+          sleep 2
+          xcrun simctl launch "$DEVICE" "$BUNDLE_ID"
+          sleep 25
+          xcrun simctl io "$DEVICE" screenshot smoke/screen.png
+          kill $LOG_PID || true
+          echo "--- JS / error lines ---"
+          grep -iE "javascript|\[js\]|error|exception|fatal|unhandled|ReactNative" smoke/app.log | grep -v "^\s*$" | tail -n 80 || true
+          if ! xcrun simctl spawn "$DEVICE" launchctl list | grep -q "$BUNDLE_ID"; then
+            echo "::error::App is not running after launch (crashed)."
+            exit 1
+          fi
+
+      - name: Upload screenshot and log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-smoke
+          path: smoke/
+          retention-days: 7
