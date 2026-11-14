@@ -6,22 +6,45 @@ on:
     paths-ignore:
       - '**.md'
       - '.gitignore'
+  pull_request:
   workflow_dispatch:
 
-# Aynı anda tek derleme: çalışan yükleme yarıda kesilmez, arada biriken push'lardan yalnızca en sonuncusu derlenir.
+# main'de aynı anda tek derleme: çalışan yükleme yarıda kesilmez, arada biriken push'lardan yalnızca sonuncusu derlenir.
+# PR'larda yalnızca kalite kontrolü çalışır ve yeni commit eskisini iptal eder.
 concurrency:
-  group: ios-testflight
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.ref) || 'ios-testflight' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   TEAM_ID: U99V9TSK2X
   BUNDLE_ID: com.heyobi.mobilegame
-  PROFILE_NAME: TapRush CI AppStore
+  PROFILE_NAME: TapRush CI AppStore  # yalnızca profil adı; değiştirmek yeni profil oluşturur
 
 jobs:
+  check:
+    name: Lint, typecheck, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - name: Expo config check
+        run: npx expo-doctor
+
   prepare:
     # Ucuz Linux koşucusunda ön kontrol: bundle ID / uygulama kaydı yoksa macOS dakikası harcanmadan durur.
     name: Check App Store Connect
+    needs: check
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

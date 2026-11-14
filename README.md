@@ -1,7 +1,19 @@
-# Tap Rush (mobile-game)
+# Shard Delve (mobile-game)
 
-Expo (SDK 57) + [`@shopify/react-native-skia`](https://shopify.github.io/react-native-skia/) ile yazılmış yer tutucu bir mobil oyun.
-Ekranda beliren daireler küçülerek kaybolur; kaybolmadan dokun. 3 can, seviye arttıkça hızlanır.
+Tur tabanlı, kısa run'lı (5–10 dk) bir zindan roguelike'ı. Expo (SDK 57) + TypeScript +
+[`@shopify/react-native-skia`](https://shopify.github.io/react-native-skia/). Tasarım: [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md).
+
+## Geliştirme
+
+```bash
+npm install
+npm run check      # lint + typecheck + testler (CI'daki kalite kapısı)
+npx expo start     # cihazda geliştirme için
+```
+
+Oyun mantığı `src/game/` altında saf TypeScript'tir ve `npm test` ile test edilir; arayüz `src/ui/` altındadır.
+
+## Sürüm hattı
 
 `main` dalına yapılan her push GitHub Actions'ta iOS derlemesi yapar, build numarasını otomatik artırır ve
 TestFlight'a yükler (`.github/workflows/ios-testflight.yml`). Hat, `heyobi/draftrewind` ile aynı yaklaşımı ve aynı
@@ -10,13 +22,6 @@ secret adlarını kullanır: `expo prebuild` → manuel imzalama (Apple Distribu
 
 Fark: provisioning profili repoya konmaz; iş akışı App Store Connect API ile profili kendisi oluşturur/indirir
 (`scripts/asc.js`), build numarasını da App Store Connect'teki en yüksek build + 1 olarak seçer.
-
-## Yerelde çalıştırma
-
-```bash
-npm install
-npx expo start
-```
 
 ## Gerekli repository secret'ları
 
