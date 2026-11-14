@@ -1,0 +1,193 @@
+name: iOS → TestFlight
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+  workflow_dispatch:
+
+# Aynı anda tek derleme: çalışan yükleme yarıda kesilmez, arada biriken push'lardan yalnızca en sonuncusu derlenir.
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: false
+
+env:
+  TEAM_ID: U99V9TSK2X
+  BUNDLE_ID: com.heyobi.mobilegame
+  PROFILE_NAME: TapRush CI AppStore
+
+jobs:
+  prepare:
+    # Ucuz Linux koşucusunda ön kontrol: bundle ID / uygulama kaydı yoksa macOS dakikası harcanmadan durur.
+    name: Check App Store Connect
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      build_number: ${{ steps.build.outputs.build_number }}
+    env:
+      ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check required secrets
+        env:
+          C: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P: ${{ secrets.P12_PASSWORD }}
+          K: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          missing=""
+          [ -n "$ASC_KEY_ID" ] || missing="$missing APP_STORE_CONNECT_KEY_ID"
+          [ -n "$ASC_ISSUER_ID" ] || missing="$missing APP_STORE_CONNECT_ISSUER_ID"
+          [ -n "$ASC_PRIVATE_KEY" ] || missing="$missing APP_STORE_CONNECT_PRIVATE_KEY"
+          [ -n "$C" ] || missing="$missing BUILD_CERTIFICATE_BASE64"
+          [ -n "$P" ] || missing="$missing P12_PASSWORD"
+          [ -n "$K" ] || missing="$missing KEYCHAIN_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::Eksik repository secret(lar):$missing — README'deki adımlara bakın."
+            exit 1
+          fi
+          echo "✓ Tüm secret'lar tanımlı"
+
+      - name: Ensure bundle ID and app record
+        id: app
+        run: node scripts/asc.js ensure-app
+
+      - name: Next build number
+        id: build
+        run: node scripts/asc.js next-build-number "${{ steps.app.outputs.app_id }}" "${{ github.run_number }}"
+
+  build:
+    name: Build & upload to TestFlight
+    needs: prepare
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+      BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Stamp build number
+        run: |
+          node -e "
+            const fs = require('fs');
+            const j = JSON.parse(fs.readFileSync('app.json', 'utf8'));
+            j.expo.ios.buildNumber = String(process.env.BUILD_NUMBER);
+            fs.writeFileSync('app.json', JSON.stringify(j, null, 2) + '\n');
+            console.log('Version', j.expo.version, 'build', j.expo.ios.buildNumber);
+          "
+
+      - name: Install Apple Distribution certificate
+        id: cert
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/build_certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          node -e "
+            let raw = (process.env.BUILD_CERTIFICATE_BASE64 || '').trim();
+            raw = raw.replace(/^BUILD_CERTIFICATE_BASE64\s*=\s*/i, '').replace(/^[\"']|[\"']$/g, '').replace(/\s+/g, '');
+            require('fs').writeFileSync(process.argv[1], Buffer.from(raw, 'base64'));
+          " "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          CLEAN_PASS=$(printf '%s' "$P12_PASSWORD" | tr -d '\r\n')
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$CLEAN_PASS" -f pkcs12 -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          rm -f "$CERT_PATH"
+
+          SERIAL=$(security find-certificate -a -c "Apple Distribution" -p "$KEYCHAIN_PATH" | openssl x509 -noout -serial | cut -d= -f2)
+          echo "Certificate serial: $SERIAL"
+          echo "serial=$SERIAL" >> "$GITHUB_OUTPUT"
+
+      - name: Create / fetch provisioning profile (App Store Connect API)
+        id: profile
+        run: node scripts/asc.js profile "${{ steps.cert.outputs.serial }}" "$PROFILE_NAME"
+
+      - name: Expo prebuild (iOS)
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Configure manual signing
+        env:
+          PROFILE_NAME: ${{ steps.profile.outputs.profile_name }}
+          PROFILE_UUID: ${{ steps.profile.outputs.profile_uuid }}
+        run: node scripts/configure-signing.js
+
+      - name: Archive
+        run: |
+          set -o pipefail
+          WORKSPACE=$(ls -d ios/*.xcworkspace | head -n 1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          echo "Workspace: $WORKSPACE, scheme: $SCHEME"
+          xcodebuild archive \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/App.xcarchive | tail -n 120
+
+      - name: Export signed IPA
+        run: |
+          set -o pipefail
+          xcodebuild -exportArchive \
+            -archivePath build/App.xcarchive \
+            -exportOptionsPlist build/ExportOptions.plist \
+            -exportPath build/ipa | tail -n 60
+          ls -lh build/ipa/
+
+      - name: Upload to App Store Connect (TestFlight)
+        run: |
+          node -e "
+            const fs = require('fs'), path = require('path'), os = require('os');
+            let raw = (process.env.ASC_PRIVATE_KEY || '').trim().replace(/^[\"']|[\"']$/g, '');
+            raw = raw.replace(/\\\\n/g, '\n').trim() + '\n';
+            const d = path.join(os.homedir(), '.appstoreconnect', 'private_keys');
+            fs.mkdirSync(d, { recursive: true });
+            fs.writeFileSync(path.join(d, 'AuthKey_' + process.env.ASC_KEY_ID + '.p8'), raw);
+          "
+          IPA_PATH=$(find build/ipa -name "*.ipa" | head -n 1)
+          echo "Uploading $IPA_PATH (build $BUILD_NUMBER)..."
+          xcrun altool --upload-app -f "$IPA_PATH" -t ios \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" --show-progress
+          echo "### ✓ Build $BUILD_NUMBER App Store Connect'e yüklendi" >> "$GITHUB_STEP_SUMMARY"
+          echo "İşlenmesi birkaç dakika sürer; ardından TestFlight uygulamasında görünür." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep IPA as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa-${{ env.BUILD_NUMBER }}
+          path: build/ipa/*.ipa
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Clean up keychain and key
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true
+          rm -rf ~/.appstoreconnect/private_keys
