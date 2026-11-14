@@ -1,5 +1,6 @@
 import { Component, type ReactNode, useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { newRun } from './src/game/engine';
@@ -11,6 +12,9 @@ import { GameScreen } from './src/ui/GameScreen';
 import { MenuScreen, ShopScreen, SummaryScreen } from './src/ui/screens';
 import { colors } from './src/ui/theme';
 
+// Keep the native splash until saved data is loaded, then hide it explicitly (see Game below).
+SplashScreen.preventAutoHideAsync().catch(() => {});
+
 type Screen = { name: 'loading' } | { name: 'menu' } | { name: 'shop' } | { name: 'game' } | { name: 'summary'; run: RunState };
 
 function Game() {
@@ -20,12 +24,20 @@ function Game() {
 
   useEffect(() => {
     let alive = true;
-    Promise.all([loadMeta(), loadRun()]).then(([m, r]) => {
-      if (!alive) return;
-      setMeta(m);
-      setRun(r);
-      setScreen({ name: 'menu' });
-    });
+    Promise.all([loadMeta(), loadRun()])
+      .then(([m, r]) => {
+        if (!alive) return;
+        setMeta(m);
+        setRun(r);
+      })
+      .catch((e) => console.error('[shard-delve] failed to load saved data', e))
+      .finally(() => {
+        if (!alive) return;
+        setScreen({ name: 'menu' });
+        SplashScreen.hide();
+        // The simulator smoke test (ios-smoke.yml) waits for this line.
+        console.log('[shard-delve] APP_READY');
+      });
     return () => {
       alive = false;
     };

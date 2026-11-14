@@ -50,20 +50,22 @@ jobs:
           xcrun simctl bootstatus "$DEVICE" -b
           xcrun simctl install "$DEVICE" "$APP"
           mkdir -p smoke
-          xcrun simctl spawn "$DEVICE" log stream --level debug --style compact \
-            --predicate "process == \"$SCHEME\"" > smoke/app.log 2>&1 &
-          LOG_PID=$!
-          sleep 2
+          START=$(date '+%Y-%m-%d %H:%M:%S')
           xcrun simctl launch "$DEVICE" "$BUNDLE_ID"
-          sleep 25
+          sleep 30
           xcrun simctl io "$DEVICE" screenshot smoke/screen.png
-          kill $LOG_PID || true
-          echo "--- JS / error lines ---"
-          grep -iE "javascript|\[js\]|error|exception|fatal|unhandled|ReactNative" smoke/app.log | grep -v "^\s*$" | tail -n 80 || true
+          xcrun simctl spawn "$DEVICE" log show --start "$START" --style compact --info --debug             --predicate 'subsystem == "com.facebook.react.log" OR process == "'"$SCHEME"'"' > smoke/app.log 2>&1 || true
+          echo "--- React Native / app log (last 120 lines) ---"
+          grep -v "^Filtering\|^Timestamp" smoke/app.log | tail -n 120 | cut -c1-400 || true
           if ! xcrun simctl spawn "$DEVICE" launchctl list | grep -q "$BUNDLE_ID"; then
             echo "::error::App is not running after launch (crashed)."
             exit 1
           fi
+          if ! grep -q "APP_READY" smoke/app.log; then
+            echo "::error::App did not report APP_READY within 30s (stuck on splash or JS error)."
+            exit 1
+          fi
+          echo "✓ App launched and reported APP_READY"
 
       - name: Upload screenshot and log
         if: always()

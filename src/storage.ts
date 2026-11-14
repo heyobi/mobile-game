@@ -6,9 +6,27 @@ import type { RunState } from './game/types';
 const META_KEY = 'shard-delve/meta/v1';
 const RUN_KEY = 'shard-delve/run/v1';
 
+const READ_TIMEOUT_MS = 3000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      }
+    );
+  });
+}
+
 async function readJson(key: string): Promise<unknown> {
   try {
-    const raw = await AsyncStorage.getItem(key);
+    const raw = await withTimeout(AsyncStorage.getItem(key), READ_TIMEOUT_MS);
     return raw ? JSON.parse(raw) : undefined;
   } catch (e) {
     console.warn(`storage: failed to read ${key}`, e);

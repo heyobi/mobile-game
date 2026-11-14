@@ -40,6 +40,13 @@ jobs:
       - name: Expo config check
         run: npx expo-doctor
 
+  smoke:
+    # Release derlemeyi simülatörde açar; splash'ı geçip APP_READY demezse TestFlight'a hiç yüklenmez.
+    name: Simulator smoke test
+    needs: check
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/ios-smoke.yml
+
   prepare:
     # Ucuz Linux koşucusunda ön kontrol: bundle ID / uygulama kaydı yoksa macOS dakikası harcanmadan durur.
     name: Check App Store Connect
@@ -89,7 +96,7 @@ jobs:
 
   build:
     name: Build & upload to TestFlight
-    needs: prepare
+    needs: [prepare, smoke]
     runs-on: macos-26
     timeout-minutes: 45
     env:
