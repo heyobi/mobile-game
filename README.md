@@ -49,25 +49,19 @@ gh secret set P12_PASSWORD -R heyobi/mobile-game                    # değeri te
 
 (macOS/Linux: `base64 < dagitim.p12 | tr -d '\n' | gh secret set BUILD_CERTIFICATE_BASE64 -R heyobi/mobile-game`)
 
-## Apple tarafında bir kerelik adımlar
+## Apple tarafı (kurulu)
 
-1. **Bundle ID:** [Apple Developer → Identifiers](https://developer.apple.com/account/resources/identifiers/list) → `+` →
-   App IDs → App → Explicit Bundle ID `com.heyobi.mobilegame` (ek yetenek gerekmez).
-   (Atlanırsa iş akışı API ile kendisi kaydetmeyi dener.)
-2. **Uygulama kaydı:** [App Store Connect → Uygulamalar](https://appstoreconnect.apple.com/apps) → `+` → Yeni Uygulama →
-   iOS, istediğiniz ad, birincil dil, Bundle ID `com.heyobi.mobilegame`, SKU ör. `mobilegame`.
-3. **Dahili test grubu:** Uygulamanın **TestFlight** sekmesi → Dahili Test (Internal Testing) yanında `+` →
-   grup adı ör. `Developers`, **Otomatik dağıtımı etkinleştir** (Enable automatic distribution) işaretli →
-   kendinizi test kullanıcısı olarak ekleyin. (Test grupları uygulama başınadır; draftrewind'deki grup buraya taşınmaz.)
-   Otomatik dağıtım açıkken her yeni build işlenince gruptaki herkese kendiliğinden gelir.
-4. iPhone'da **TestFlight** uygulamasını açın; build birkaç dakikalık işlemden sonra görünür.
+- Bundle ID `com.heyobi.mobilegame` kayıtlı (iş akışı yoksa API ile kendisi kaydeder).
+- App Store Connect uygulama kaydı: **Heyobi Game** (geçici ad, yayından önce değiştirilebilir), app id `6834633630`.
+- TestFlight dahili grubu **Developers**: otomatik dağıtım açık, hesap sahibi test kullanıcısı. Her yeni build
+  işlendiğinde iPhone'daki TestFlight uygulamasına kendiliğinden gelir.
+- Yeni bir dahili test kullanıcısı eklemek için: App Store Connect → Heyobi Game → TestFlight → Developers →
+  Testers `+` (kullanıcının önce Kullanıcılar ve Erişim'de olması gerekir).
 
 "Submit for Review" gerekmez; dahili TestFlight testleri için inceleme yoktur.
 
 ## GitHub Actions dakikaları
 
-Repo özel (private) olduğu için macOS dakikaları ücretsiz kotadan **10 kat** sayılır (GitHub Free: ayda 2000 dk →
-yaklaşık 200 macOS dakikası, bir derleme ~8–12 dk). Ödeme yöntemi/harcama limiti tanımlı değilse kota bitince
-iş akışları durur, ücret çıkmaz. Kotayı korumak için: yalnızca `.md` değişen push'lar derlenmez; aynı anda tek
-derleme çalışır ve arada biriken push'lardan yalnızca sonuncusu derlenir. Repo herkese açık (public) yapılırsa
-dakikalar sınırsız ve ücretsizdir.
+Repo herkese açık (public) olduğu için standart GitHub koşucuları (macOS dahil) ücretsiz ve dakika sınırı yoktur.
+Secret'lar herkese açık repoda da gizli kalır; fork'lardan açılan PR'lar secret'lara erişemez ve bu iş akışı yalnızca
+`main`'e push ve elle tetiklemede çalışır. Yalnızca `.md` değişen push'lar derlenmez; aynı anda tek derleme çalışır.
